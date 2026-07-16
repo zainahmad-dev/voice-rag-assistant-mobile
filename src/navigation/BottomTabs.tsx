@@ -11,6 +11,7 @@ import { Library, Mic } from "lucide-react-native";
 import { useTheme } from "../theme/ThemeProvider";
 import { fonts } from "../theme/typography";
 import { spacing } from "../theme/spacing";
+import { LibraryScreen } from "../screens/LibraryScreen";
 
 export type RootTabParamList = {
   Library: undefined;
@@ -18,18 +19,6 @@ export type RootTabParamList = {
 };
 
 const Tab = createBottomTabNavigator<RootTabParamList>();
-
-/** Placeholder until LibraryScreen lands in phase 10. */
-function LibraryPlaceholder() {
-  const { palette } = useTheme();
-  return (
-    <View style={[styles.placeholder, { backgroundColor: palette.bg }]}>
-      <Text style={[styles.placeholderText, { color: palette.ink }]}>
-        Library
-      </Text>
-    </View>
-  );
-}
 
 /** Placeholder until the Assistant screen lands in a later phase. */
 function AssistantPlaceholder() {
@@ -82,7 +71,7 @@ export function BottomTabs() {
       >
         <Tab.Screen
           name="Library"
-          component={LibraryPlaceholder}
+          component={LibraryScreen}
           options={{
             tabBarIcon: ({ color, size }) => (
               <Library color={color} size={size} />

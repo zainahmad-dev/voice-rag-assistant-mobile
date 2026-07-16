@@ -1,20 +1,54 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import React from "react";
+import { StatusBar } from "expo-status-bar";
+import { useFonts } from "expo-font";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import {
+  SpaceGrotesk_500Medium,
+  SpaceGrotesk_600SemiBold,
+  SpaceGrotesk_700Bold,
+} from "@expo-google-fonts/space-grotesk";
+import {
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+} from "@expo-google-fonts/inter";
+import {
+  JetBrainsMono_400Regular,
+  JetBrainsMono_500Medium,
+} from "@expo-google-fonts/jetbrains-mono";
 
-export default function App() {
-  return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
-  );
+import { ThemeProvider, useTheme } from "./src/theme/ThemeProvider";
+import { BottomTabs } from "./src/navigation/BottomTabs";
+
+/** Status bar that tracks the active theme (inside ThemeProvider). */
+function ThemedStatusBar() {
+  const { mode } = useTheme();
+  return <StatusBar style={mode === "dark" ? "light" : "dark"} />;
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
+export default function App() {
+  // Weights must match src/theme/typography.ts
+  const [fontsLoaded] = useFonts({
+    SpaceGrotesk_500Medium,
+    SpaceGrotesk_600SemiBold,
+    SpaceGrotesk_700Bold,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    JetBrainsMono_400Regular,
+    JetBrainsMono_500Medium,
+  });
+
+  if (!fontsLoaded) {
+    return null;
+  }
+
+  return (
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <ThemedStatusBar />
+        <BottomTabs />
+      </ThemeProvider>
+    </SafeAreaProvider>
+  );
+}
