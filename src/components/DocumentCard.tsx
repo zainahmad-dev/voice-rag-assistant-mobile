@@ -11,19 +11,7 @@ import { FileText, Trash2 } from "lucide-react-native";
 import { useTheme } from "../theme/ThemeProvider";
 import { fonts } from "../theme/typography";
 import { spacing } from "../theme/spacing";
-
-// Mirrors the backend document row (web: src/types/document.ts). Lives here
-// until the API client lands in phase 15, then moves to src/lib/api.ts.
-export type DocumentStatus = "pending" | "processing" | "completed" | "failed";
-
-export type DocumentRecord = {
-  id: string;
-  file_name: string;
-  status: DocumentStatus;
-  chunk_count: number;
-  error_message: string | null;
-  created_at: string;
-};
+import type { DocumentRecord } from "../lib/api";
 
 type DocumentCardProps = {
   document: DocumentRecord;

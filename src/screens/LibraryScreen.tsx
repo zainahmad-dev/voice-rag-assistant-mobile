@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
+  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -14,11 +15,9 @@ import { useTheme } from "../theme/ThemeProvider";
 import { fonts } from "../theme/typography";
 import { spacing } from "../theme/spacing";
 import { UploadButton, type PickedFile } from "../components/UploadButton";
-import {
-  DocumentCard,
-  type DocumentRecord,
-} from "../components/DocumentCard";
+import { DocumentCard } from "../components/DocumentCard";
 import { EmptyState } from "../components/EmptyState";
+import { uploadDocument, type DocumentRecord } from "../lib/api";
 
 // Mock data exercising all three card states — replaced by the real API in
 // phases 15–17.
@@ -26,6 +25,8 @@ const MOCK_DOCUMENTS: DocumentRecord[] = [
   {
     id: "1",
     file_name: "quarterly-report-2026.pdf",
+    file_type: "pdf",
+    storage_path: "1/quarterly-report-2026.pdf",
     status: "completed",
     chunk_count: 42,
     error_message: null,
@@ -34,6 +35,8 @@ const MOCK_DOCUMENTS: DocumentRecord[] = [
   {
     id: "2",
     file_name: "meeting-notes-with-a-really-long-filename-example.docx",
+    file_type: "docx",
+    storage_path: "2/meeting-notes-with-a-really-long-filename-example.docx",
     status: "processing",
     chunk_count: 0,
     error_message: null,
@@ -42,6 +45,8 @@ const MOCK_DOCUMENTS: DocumentRecord[] = [
   {
     id: "3",
     file_name: "corrupted-scan.pdf",
+    file_type: "pdf",
+    storage_path: "3/corrupted-scan.pdf",
     status: "failed",
     chunk_count: 0,
     error_message: "Could not extract text from this PDF.",
@@ -53,6 +58,7 @@ export function LibraryScreen() {
   const { palette, mode, toggle } = useTheme();
   const [documents, setDocuments] = useState<DocumentRecord[]>(MOCK_DOCUMENTS);
   const [refreshing, setRefreshing] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const indexedCount = documents.filter(
     (doc) => doc.status === "completed",
@@ -67,9 +73,22 @@ export function LibraryScreen() {
     }, 800);
   }, []);
 
-  // Real upload flow arrives in phase 17.
-  const handlePick = useCallback((file: PickedFile) => {
-    console.log("picked file", file);
+  // Minimal test hook so the upload flow (and its trace logging) actually runs.
+  // The full flow — refetch on success + status polling — arrives in phase 17.
+  const handlePick = useCallback(async (file: PickedFile) => {
+    setUploading(true);
+    try {
+      const doc = await uploadDocument(file);
+      console.log("[upload] done", { id: doc.id, status: doc.status });
+    } catch (err) {
+      console.warn("[upload] failed", err);
+      Alert.alert(
+        "Upload failed",
+        err instanceof Error ? err.message : "Something went wrong.",
+      );
+    } finally {
+      setUploading(false);
+    }
   }, []);
 
   const handleDelete = useCallback((id: string) => {
@@ -125,7 +144,7 @@ export function LibraryScreen() {
         )}
         ListHeaderComponent={
           <View style={styles.uploadWrapper}>
-            <UploadButton onPick={handlePick} />
+            <UploadButton onPick={handlePick} uploading={uploading} />
           </View>
         }
         ListEmptyComponent={<EmptyState />}

@@ -6,13 +6,7 @@ import { UploadCloud } from "lucide-react-native";
 import { useTheme } from "../theme/ThemeProvider";
 import { fonts } from "../theme/typography";
 import { spacing } from "../theme/spacing";
-
-// Matches the web app's accepted types (UploadDropzone.tsx).
-const ACCEPTED_MIME_TYPES = [
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "text/plain",
-];
+import { ACCEPTED_MIME_TYPES } from "../lib/upload";
 
 export type PickedFile = {
   uri: string;
@@ -50,7 +44,7 @@ export function UploadButton({ onPick, uploading = false }: UploadButtonProps) {
     setPicking(true);
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ACCEPTED_MIME_TYPES,
+        type: [...ACCEPTED_MIME_TYPES],
         multiple: false,
         copyToCacheDirectory: true,
       });
