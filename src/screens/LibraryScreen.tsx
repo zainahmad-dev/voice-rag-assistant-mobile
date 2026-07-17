@@ -1,5 +1,6 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Pressable,
@@ -17,83 +18,128 @@ import { spacing } from "../theme/spacing";
 import { UploadButton, type PickedFile } from "../components/UploadButton";
 import { DocumentCard } from "../components/DocumentCard";
 import { EmptyState } from "../components/EmptyState";
-import { uploadDocument, type DocumentRecord } from "../lib/api";
+import {
+  deleteDocument,
+  fetchDocuments,
+  uploadDocument,
+  type DocumentRecord,
+} from "../lib/api";
 
-// Mock data exercising all three card states — replaced by the real API in
-// phases 15–17.
-const MOCK_DOCUMENTS: DocumentRecord[] = [
-  {
-    id: "1",
-    file_name: "quarterly-report-2026.pdf",
-    file_type: "pdf",
-    storage_path: "1/quarterly-report-2026.pdf",
-    status: "completed",
-    chunk_count: 42,
-    error_message: null,
-    created_at: "2026-07-15T10:24:00Z",
-  },
-  {
-    id: "2",
-    file_name: "meeting-notes-with-a-really-long-filename-example.docx",
-    file_type: "docx",
-    storage_path: "2/meeting-notes-with-a-really-long-filename-example.docx",
-    status: "processing",
-    chunk_count: 0,
-    error_message: null,
-    created_at: "2026-07-17T08:02:00Z",
-  },
-  {
-    id: "3",
-    file_name: "corrupted-scan.pdf",
-    file_type: "pdf",
-    storage_path: "3/corrupted-scan.pdf",
-    status: "failed",
-    chunk_count: 0,
-    error_message: "Could not extract text from this PDF.",
-    created_at: "2026-07-16T18:40:00Z",
-  },
-];
+// While any document is still indexing, re-poll the list this often (ms).
+const POLL_INTERVAL_MS = 3000;
+
+/** A document is still being indexed while pending or processing. */
+function isInProgress(doc: DocumentRecord): boolean {
+  return doc.status === "pending" || doc.status === "processing";
+}
 
 export function LibraryScreen() {
   const { palette, mode, toggle } = useTheme();
-  const [documents, setDocuments] = useState<DocumentRecord[]>(MOCK_DOCUMENTS);
+  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const indexedCount = documents.filter(
     (doc) => doc.status === "completed",
   ).length;
+  const anyInProgress = documents.some(isInProgress);
 
-  // Simulated refresh until the API client lands in phase 15.
-  const handleRefresh = useCallback(() => {
-    setRefreshing(true);
-    setTimeout(() => {
-      setDocuments(MOCK_DOCUMENTS);
-      setRefreshing(false);
-    }, 800);
-  }, []);
-
-  // Minimal test hook so the upload flow (and its trace logging) actually runs.
-  // The full flow — refetch on success + status polling — arrives in phase 17.
-  const handlePick = useCallback(async (file: PickedFile) => {
-    setUploading(true);
+  // Fetches the list from the API. `silent` skips error surfacing for
+  // background polls, so a transient blip doesn't replace the list with an error.
+  const loadDocuments = useCallback(async (silent = false) => {
     try {
-      const doc = await uploadDocument(file);
-      console.log("[upload] done", { id: doc.id, status: doc.status });
+      const docs = await fetchDocuments();
+      setDocuments(docs);
+      setLoadError(null);
     } catch (err) {
-      console.warn("[upload] failed", err);
-      Alert.alert(
-        "Upload failed",
-        err instanceof Error ? err.message : "Something went wrong.",
-      );
-    } finally {
-      setUploading(false);
+      console.warn("[documents] load failed", err);
+      if (!silent) {
+        setLoadError(
+          err instanceof Error ? err.message : "Could not load documents.",
+        );
+      }
     }
   }, []);
 
-  const handleDelete = useCallback((id: string) => {
-    setDocuments((prev) => prev.filter((doc) => doc.id !== id));
+  // Initial load.
+  useEffect(() => {
+    void (async () => {
+      await loadDocuments();
+      setLoading(false);
+    })();
+  }, [loadDocuments]);
+
+  // Status polling: while any document is still indexing, refetch every few
+  // seconds. The interval tears down once nothing is in progress.
+  useEffect(() => {
+    if (!anyInProgress) return;
+    const interval = setInterval(() => {
+      void loadDocuments(true);
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [anyInProgress, loadDocuments]);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadDocuments();
+    setRefreshing(false);
+  }, [loadDocuments]);
+
+  const handlePick = useCallback(
+    async (file: PickedFile) => {
+      setUploading(true);
+      try {
+        await uploadDocument(file);
+        // Refetch so the new (pending) row appears; polling handles the rest.
+        await loadDocuments();
+      } catch (err) {
+        console.warn("[upload] failed", err);
+        Alert.alert(
+          "Upload failed",
+          err instanceof Error ? err.message : "Something went wrong.",
+        );
+      } finally {
+        setUploading(false);
+      }
+    },
+    [loadDocuments],
+  );
+
+  const handleDelete = useCallback(async (id: string) => {
+    setDeletingId(id);
+    try {
+      await deleteDocument(id);
+      setDocuments((prev) => prev.filter((doc) => doc.id !== id));
+    } catch (err) {
+      console.warn("[delete] failed", err);
+      Alert.alert(
+        "Delete failed",
+        err instanceof Error ? err.message : "Something went wrong.",
+      );
+    } finally {
+      setDeletingId(null);
+    }
   }, []);
+
+  const listEmpty = loading ? (
+    <View style={styles.centerState}>
+      <ActivityIndicator color={palette.moss} />
+    </View>
+  ) : loadError ? (
+    <View style={styles.centerState}>
+      <Text style={[styles.errorText, { color: palette.alert }]}>
+        {loadError}
+      </Text>
+      <Text style={[styles.errorHint, { color: palette.inkSoft }]}>
+        Pull down to try again.
+      </Text>
+    </View>
+  ) : (
+    <EmptyState />
+  );
 
   return (
     <SafeAreaView
@@ -140,6 +186,7 @@ export function LibraryScreen() {
           <DocumentCard
             document={item}
             onDelete={() => handleDelete(item.id)}
+            deleting={deletingId === item.id}
           />
         )}
         ListHeaderComponent={
@@ -147,7 +194,7 @@ export function LibraryScreen() {
             <UploadButton onPick={handlePick} uploading={uploading} />
           </View>
         }
-        ListEmptyComponent={<EmptyState />}
+        ListEmptyComponent={listEmpty}
         ItemSeparatorComponent={Separator}
         refreshControl={
           <RefreshControl
@@ -210,5 +257,21 @@ const styles = StyleSheet.create({
   },
   separator: {
     height: spacing.sm,
+  },
+  centerState: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: spacing.xxl,
+    gap: spacing.sm,
+  },
+  errorText: {
+    fontFamily: fonts.body.medium,
+    fontSize: 14,
+    textAlign: "center",
+  },
+  errorHint: {
+    fontFamily: fonts.body.regular,
+    fontSize: 12,
+    textAlign: "center",
   },
 });
