@@ -4,6 +4,7 @@
  *
  * NOTE: phase 16 originally specified a multipart `formatFormData` helper, but
  * the deployed backend uses a two-step Supabase signed-URL flow (see api.ts),
+ * 
  * so there is no multipart FormData. The React-Native-specific concern that
  * `formatFormData` addressed — getting a local `file://` URI's bytes onto the
  * wire — lives in `uploadFileToSignedUrl` below instead.
