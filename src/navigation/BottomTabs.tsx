@@ -1,5 +1,4 @@
 import React, { useMemo } from "react";
-import { StyleSheet, Text, View } from "react-native";
 import {
   DarkTheme,
   DefaultTheme,
@@ -10,8 +9,8 @@ import { Library, Mic } from "lucide-react-native";
 
 import { useTheme } from "../theme/ThemeProvider";
 import { fonts } from "../theme/typography";
-import { spacing } from "../theme/spacing";
 import { LibraryScreen } from "../screens/LibraryScreen";
+import { AssistantScreen } from "../screens/AssistantScreen";
 
 export type RootTabParamList = {
   Library: undefined;
@@ -19,18 +18,6 @@ export type RootTabParamList = {
 };
 
 const Tab = createBottomTabNavigator<RootTabParamList>();
-
-/** Placeholder until the Assistant screen lands in a later phase. */
-function AssistantPlaceholder() {
-  const { palette } = useTheme();
-  return (
-    <View style={[styles.placeholder, { backgroundColor: palette.bg }]}>
-      <Text style={[styles.placeholderText, { color: palette.ink }]}>
-        Assistant
-      </Text>
-    </View>
-  );
-}
 
 export function BottomTabs() {
   const { palette, mode } = useTheme();
@@ -80,7 +67,7 @@ export function BottomTabs() {
         />
         <Tab.Screen
           name="Assistant"
-          component={AssistantPlaceholder}
+          component={AssistantScreen}
           options={{
             tabBarIcon: ({ color, size }) => <Mic color={color} size={size} />,
           }}
@@ -89,16 +76,3 @@ export function BottomTabs() {
     </NavigationContainer>
   );
 }
-
-const styles = StyleSheet.create({
-  placeholder: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-  },
-  placeholderText: {
-    fontFamily: fonts.display.semiBold,
-    fontSize: 18,
-  },
-});

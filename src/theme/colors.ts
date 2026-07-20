@@ -27,6 +27,8 @@ export type Palette = {
   ochreTint: string;
   /** Errors, destructive actions */
   alert: string;
+  /** Text on moss-filled message bubbles (web uses text-background on accent) */
+  bubbleText: string;
 };
 
 export const lightColors: Palette = {
@@ -40,6 +42,7 @@ export const lightColors: Palette = {
   ochre: "#C1832E",
   ochreTint: "#F5E9D6",
   alert: "#B23A2E",
+  bubbleText: "#F6F4EF", // light text on dark moss
 };
 
 export const darkColors: Palette = {
@@ -53,6 +56,7 @@ export const darkColors: Palette = {
   ochre: "#D9AE68", // web --secondary
   ochreTint: "#332A19", // web --secondary-subtle
   alert: "#D9756C", // web --danger
+  bubbleText: "#0D1817", // dark text on light teal moss (web text-background)
 };
 
 export const palettes = {
