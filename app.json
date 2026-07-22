@@ -6,10 +6,20 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "newArchEnabled": false,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.zainahmaddev.voiceragassistantmobile",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Ask questions about your documents by voice"
+      }
     },
     "android": {
+      "package": "com.zainahmaddev.voiceragassistantmobile",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -22,7 +32,19 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-font"
-    ]
+      "expo-font",
+      [
+        "expo-dev-client",
+        {
+          "launchMode": "most-recent"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "54b63d4b-19de-4878-8b2a-54f63ab6e04e"
+      }
+    },
+    "owner": "zainahmaddev"
   }
 }
