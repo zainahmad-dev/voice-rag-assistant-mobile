@@ -19,6 +19,7 @@ import { spacing } from "../theme/spacing";
 import { MessageBubble } from "../components/MessageBubble";
 import { VoiceOrb } from "../components/VoiceOrb";
 import { Loading } from "../components/Loading";
+import { useVapiCall } from "../hooks/useVapiCall";
 import { askQuestion } from "../lib/api";
 import {
   useConversationStore,
@@ -38,6 +39,12 @@ export function AssistantScreen() {
   const addMessage = useConversationStore((state) => state.addMessage);
   const [draft, setDraft] = useState("");
   const [asking, setAsking] = useState(false);
+  const {
+    state: voiceState,
+    error: voiceError,
+    toggleCall,
+    dismissError,
+  } = useVapiCall();
 
   const canSend = draft.trim().length > 0 && !asking;
 
@@ -114,7 +121,25 @@ export function AssistantScreen() {
         />
 
         <View style={styles.orbArea}>
-          <VoiceOrb state="idle" />
+          {voiceError && (
+            <Pressable
+              onPress={dismissError}
+              accessibilityRole="button"
+              accessibilityLabel={`${voiceError} Tap to dismiss.`}
+              style={[
+                styles.voiceError,
+                {
+                  backgroundColor: palette.surface,
+                  borderColor: palette.alert,
+                },
+              ]}
+            >
+              <Text style={[styles.voiceErrorText, { color: palette.alert }]}>
+                {voiceError}
+              </Text>
+            </Pressable>
+          )}
+          <VoiceOrb state={voiceState} onPress={toggleCall} />
         </View>
 
         <View
@@ -190,6 +215,20 @@ const styles = StyleSheet.create({
   orbArea: {
     alignItems: "center",
     paddingVertical: spacing.lg,
+    gap: spacing.md,
+  },
+  voiceError: {
+    marginHorizontal: spacing.lg,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  voiceErrorText: {
+    fontFamily: fonts.body.medium,
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: "center",
   },
   inputBar: {
     flexDirection: "row",
