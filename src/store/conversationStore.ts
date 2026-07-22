@@ -13,7 +13,7 @@ export type ConversationMessage = {
 };
 
 /** Caller supplies the content; the store stamps id and createdAt. */
-type NewMessage = Omit<ConversationMessage, "id" | "createdAt">;
+export type NewMessage = Omit<ConversationMessage, "id" | "createdAt">;
 
 type ConversationState = {
   messages: ConversationMessage[];
