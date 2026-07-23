@@ -3,7 +3,7 @@ import { PermissionsAndroid, Platform } from "react-native";
 
 import type { VoiceOrbState } from "../components/VoiceOrb";
 import { NETWORK_MESSAGE, isNetworkError, withHint } from "../lib/errors";
-import { extractNewTurns } from "../lib/parseConversationUpdate";
+import { parseConversationUpdate } from "../lib/parseConversationUpdate";
 import { assistantConfig, getVapiClient, resetVapiClient } from "../lib/vapi";
 import { useConversationStore } from "../store/conversationStore";
 
@@ -193,10 +193,16 @@ export function useVapiCall(): UseVapiCallResult {
   // Voice turns land in the same store the typed flow writes to, so the two
   // interleave in one history and persist to AsyncStorage together.
   const addMessage = useConversationStore((store) => store.addMessage);
-  // How much of the resent conversation history we've already stored, and the
-  // retrieval line waiting to be attached to the next spoken answer.
-  const processedCountRef = useRef(0);
-  const pendingSourceRef = useRef<string | undefined>(undefined);
+  const updateMessage = useConversationStore((store) => store.updateMessage);
+  // The store messages created for the current call, in order, each with the
+  // content/source last written to it. `conversation-update` resends the whole
+  // history every time and grows the in-progress answer, so we diff the newly
+  // derived turns against this list — extending an existing bubble in place
+  // instead of adding one per streamed chunk, and appending only genuinely new
+  // turns (a fresh user question, or the first segment of the next answer).
+  const liveTurnsRef = useRef<
+    { id: string; content: string; source?: string }[]
+  >([]);
 
   const getClient = useCallback(() => {
     const vapi = getVapiClient();
@@ -209,10 +215,9 @@ export function useVapiCall(): UseVapiCallResult {
     vapi.on("call-start", () => {
       console.log("[vapi] call-start — connected and listening (mic live)");
       activeRef.current = true;
-      // Each call starts its own conversation history, so the cursor restarts
-      // from zero while the store keeps everything from previous calls.
-      processedCountRef.current = 0;
-      pendingSourceRef.current = undefined;
+      // Each call tracks only its own turns; the store keeps everything from
+      // previous calls, but nothing here should touch those earlier bubbles.
+      liveTurnsRef.current = [];
       setError(null);
       setState("listening");
     });
@@ -265,14 +270,32 @@ export function useVapiCall(): UseVapiCallResult {
 
       if (record.type !== "conversation-update") return;
 
-      const { turns, nextIndex, pendingSource } = extractNewTurns(
-        record.messages,
-        processedCountRef.current,
-        pendingSourceRef.current,
-      );
-      processedCountRef.current = nextIndex;
-      pendingSourceRef.current = pendingSource;
-      turns.forEach(addMessage);
+      // Re-derive the whole call from the resent history, then reconcile it
+      // against what we've already shown: grow the in-progress answer's bubble
+      // in place, and append only turns we haven't rendered yet. Turns already
+      // committed (finished user/assistant bubbles) never change, so matching
+      // by position is safe — the only mutable turn is the last one, still
+      // being spoken.
+      const derived = parseConversationUpdate(record.messages);
+      const live = liveTurnsRef.current;
+      for (let i = 0; i < derived.length; i += 1) {
+        const turn = derived[i];
+        const existing = live[i];
+        if (!existing) {
+          const id = addMessage(turn);
+          live.push({ id, content: turn.content, source: turn.source });
+        } else if (
+          existing.content !== turn.content ||
+          existing.source !== turn.source
+        ) {
+          updateMessage(existing.id, {
+            content: turn.content,
+            source: turn.source,
+          });
+          existing.content = turn.content;
+          existing.source = turn.source;
+        }
+      }
     });
     vapi.on("error", (callError: unknown) => {
       logVapiError("[vapi] call error", callError);
@@ -282,7 +305,7 @@ export function useVapiCall(): UseVapiCallResult {
     });
 
     return vapi;
-  }, [addMessage]);
+  }, [addMessage, updateMessage]);
 
   const stopCall = useCallback(() => {
     activeRef.current = false;
