@@ -9,6 +9,7 @@
  */
 
 import { BASE_URL } from "./constants";
+import { CONFIG_MESSAGE, NETWORK_MESSAGE, statusHint, withHint } from "./errors";
 import {
   buildUploadMetadata,
   uploadFileToSignedUrl,
@@ -76,7 +77,8 @@ export type UploadFile = {
 /**
  * Throws a human-readable Error for a non-2xx response, preferring the
  * backend's `{ error }` / `{ message }` body when present. `action` names the
- * operation for the fallback message (e.g. "Loading documents").
+ * operation for the fallback message (e.g. "Loading documents"). A next-step
+ * hint for the status is appended so the message never dead-ends.
  */
 async function assertOk(res: Response, action: string): Promise<void> {
   if (res.ok) return;
@@ -89,7 +91,43 @@ async function assertOk(res: Response, action: string): Promise<void> {
   } catch {
     // Non-JSON error body — keep the status-based message.
   }
-  throw new Error(message);
+  throw new Error(withHint(message, statusHint(res.status)));
+}
+
+/**
+ * `fetch` against the backend with the two failure modes that aren't HTTP
+ * statuses handled up front: no configured base URL, and a request that never
+ * reached the server. Both otherwise surface as an opaque TypeError.
+ */
+async function request(
+  path: string,
+  action: string,
+  init?: RequestInit,
+): Promise<Response> {
+  if (!BASE_URL) throw new Error(CONFIG_MESSAGE);
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, init);
+  } catch (err) {
+    console.warn(`[api] ${action} — request failed`, err);
+    throw new Error(NETWORK_MESSAGE);
+  }
+
+  await assertOk(res, action);
+  return res;
+}
+
+/** Parses a JSON body, treating a malformed one as a server-side failure. */
+async function readJson<T>(res: Response, action: string): Promise<T> {
+  try {
+    return (await res.json()) as T;
+  } catch (err) {
+    console.warn(`[api] ${action} — bad JSON`, err);
+    throw new Error(
+      `${action} failed: the server sent an unexpected response. Please try again in a moment.`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -98,18 +136,18 @@ async function assertOk(res: Response, action: string): Promise<void> {
 
 /** GET /api/documents — the full document library, newest first. */
 export async function fetchDocuments(): Promise<DocumentRecord[]> {
-  const res = await fetch(`${BASE_URL}/api/documents`);
-  await assertOk(res, "Loading documents");
-  return (await res.json()) as DocumentRecord[];
+  const action = "Loading documents";
+  const res = await request("/api/documents", action);
+  return readJson<DocumentRecord[]>(res, action);
 }
 
 /** DELETE /api/documents/[id] — remove a document and its chunks. */
 export async function deleteDocument(id: string): Promise<void> {
-  const res = await fetch(
-    `${BASE_URL}/api/documents/${encodeURIComponent(id)}`,
+  await request(
+    `/api/documents/${encodeURIComponent(id)}`,
+    "Deleting document",
     { method: "DELETE" },
   );
-  await assertOk(res, "Deleting document");
 }
 
 /** Step-1 response from POST /api/upload. */
@@ -121,12 +159,24 @@ type SignedUploadResponse = {
 };
 
 /**
- * Uploads a document using the backend's two-step Supabase flow:
+ * Uploads a document using the backend's three-step flow — the same one the
+ * web client runs (see the web app's UploadDropzone.tsx):
  *   1. POST /api/upload with the file metadata → a pending DocumentRecord plus
  *      a signed storage URL.
  *   2. PUT the file bytes directly to that signed URL.
- * The backend then chunks/embeds asynchronously (status: pending → processing
- * → completed), so callers refetch/poll for the final state (phase 17).
+ *   3. POST /api/ingest with the document id → extract, chunk, embed, index.
+ *
+ * Step 3 is not optional: nothing on the backend watches Storage, so a
+ * document that skips it stays `pending` with zero chunks forever — visible in
+ * both clients' libraries but invisible to every query. (Phase 32 found two
+ * such rows from earlier mobile uploads, which is how this was caught.)
+ *
+ * Ingest is fired without awaiting, because it runs the whole pipeline inside
+ * that one request (up to 60s for a large PDF). Awaiting would hold the upload
+ * spinner for the duration; instead the pending row is returned right away and
+ * the library's existing status polling reports indexing → ready. A failed
+ * ingest still surfaces: the backend writes `status: failed` with an
+ * `error_message`, which the document card renders.
  *
  * Validation and the RN-specific storage upload live in ./upload for
  * testability. Resolves to the pending DocumentRecord created in step 1.
@@ -136,23 +186,24 @@ export async function uploadDocument(file: UploadFile): Promise<DocumentRecord> 
   if (!validation.valid) throw new Error(validation.reason);
 
   const metadata = buildUploadMetadata(file);
-  console.log("[upload] 1/4 POST /api/upload", {
+  console.log("[upload] 1/5 POST /api/upload", {
     baseUrl: BASE_URL,
     ...metadata,
     uri: file.uri,
   });
 
   // Step 1 — reserve a document row and obtain a signed storage URL.
-  const initRes = await fetch(`${BASE_URL}/api/upload`, {
+  const initRes = await request("/api/upload", "Starting upload", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(metadata),
   });
-  await assertOk(initRes, "Starting upload");
-  const { document, signedUrl } =
-    (await initRes.json()) as SignedUploadResponse;
+  const { document, signedUrl } = await readJson<SignedUploadResponse>(
+    initRes,
+    "Starting upload",
+  );
 
-  console.log("[upload] 2/4 signed URL received", {
+  console.log("[upload] 2/5 signed URL received", {
     documentId: document.id,
     status: document.status,
     signedUrl,
@@ -161,16 +212,41 @@ export async function uploadDocument(file: UploadFile): Promise<DocumentRecord> 
   // Step 2 — upload the file bytes to Supabase Storage.
   await uploadFileToSignedUrl(signedUrl, file);
 
+  // Step 3 — kick off indexing. Deliberately not awaited; see the note above.
+  void startIngest(document.id);
+
   return document;
+}
+
+/**
+ * POST /api/ingest — asks the backend to index an already-uploaded document.
+ *
+ * Never rejects: the caller doesn't await it, and an unhandled rejection would
+ * be a red-box warning rather than something the user can act on. The document
+ * row is the real status channel — the backend marks it `failed` with a reason
+ * the library then shows.
+ */
+async function startIngest(documentId: string): Promise<void> {
+  console.log("[upload] 5/5 POST /api/ingest", { documentId });
+  try {
+    await request("/api/ingest", "Indexing document", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId }),
+    });
+    console.log("[upload] ingest complete", { documentId });
+  } catch (err) {
+    console.warn("[upload] ingest failed", { documentId }, err);
+  }
 }
 
 /** POST /api/query — ask a question and get an answer with its sources. */
 export async function askQuestion(question: string): Promise<QueryResponse> {
-  const res = await fetch(`${BASE_URL}/api/query`, {
+  const action = "Asking question";
+  const res = await request("/api/query", action, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question }),
   });
-  await assertOk(res, "Asking question");
-  return (await res.json()) as QueryResponse;
+  return readJson<QueryResponse>(res, action);
 }
