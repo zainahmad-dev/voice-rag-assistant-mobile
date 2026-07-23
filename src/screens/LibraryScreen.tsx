@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   FlatList,
   Pressable,
@@ -18,12 +17,14 @@ import { spacing } from "../theme/spacing";
 import { UploadButton, type PickedFile } from "../components/UploadButton";
 import { DocumentCard } from "../components/DocumentCard";
 import { EmptyState } from "../components/EmptyState";
+import { Loading } from "../components/Loading";
 import {
   deleteDocument,
   fetchDocuments,
   uploadDocument,
   type DocumentRecord,
 } from "../lib/api";
+import { describeError } from "../lib/errors";
 
 // While any document is still indexing, re-poll the list this often (ms).
 const POLL_INTERVAL_MS = 3000;
@@ -58,7 +59,10 @@ export function LibraryScreen() {
       console.warn("[documents] load failed", err);
       if (!silent) {
         setLoadError(
-          err instanceof Error ? err.message : "Could not load documents.",
+          describeError(
+            err,
+            "Couldn't load your documents. Please try again in a moment.",
+          ),
         );
       }
     }
@@ -88,6 +92,13 @@ export function LibraryScreen() {
     setRefreshing(false);
   }, [loadDocuments]);
 
+  const handleRetry = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    await loadDocuments();
+    setLoading(false);
+  }, [loadDocuments]);
+
   const handlePick = useCallback(
     async (file: PickedFile) => {
       setUploading(true);
@@ -99,7 +110,10 @@ export function LibraryScreen() {
         console.warn("[upload] failed", err);
         Alert.alert(
           "Upload failed",
-          err instanceof Error ? err.message : "Something went wrong.",
+          describeError(
+            err,
+            "That file couldn't be uploaded. Please try again in a moment.",
+          ),
         );
       } finally {
         setUploading(false);
@@ -108,25 +122,39 @@ export function LibraryScreen() {
     [loadDocuments],
   );
 
-  const handleDelete = useCallback(async (id: string) => {
-    setDeletingId(id);
-    try {
-      await deleteDocument(id);
-      setDocuments((prev) => prev.filter((doc) => doc.id !== id));
-    } catch (err) {
-      console.warn("[delete] failed", err);
-      Alert.alert(
-        "Delete failed",
-        err instanceof Error ? err.message : "Something went wrong.",
-      );
-    } finally {
-      setDeletingId(null);
-    }
+  const handlePickError = useCallback((message: string) => {
+    Alert.alert("Couldn't pick a file", message);
   }, []);
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      setDeletingId(id);
+      try {
+        await deleteDocument(id);
+        setDocuments((prev) => prev.filter((doc) => doc.id !== id));
+      } catch (err) {
+        console.warn("[delete] failed", err);
+        Alert.alert(
+          "Delete failed",
+          describeError(
+            err,
+            "That document couldn't be deleted. Please try again in a moment.",
+          ),
+          [
+            { text: "OK", style: "cancel" },
+            { text: "Retry", onPress: () => void handleDelete(id) },
+          ],
+        );
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [],
+  );
 
   const listEmpty = loading ? (
     <View style={styles.centerState}>
-      <ActivityIndicator color={palette.moss} />
+      <Loading centered size="large" label="Loading your documents…" />
     </View>
   ) : loadError ? (
     <View style={styles.centerState}>
@@ -134,8 +162,24 @@ export function LibraryScreen() {
         {loadError}
       </Text>
       <Text style={[styles.errorHint, { color: palette.inkSoft }]}>
-        Pull down to try again.
+        Pull down to refresh, or tap below.
       </Text>
+      <Pressable
+        onPress={handleRetry}
+        accessibilityRole="button"
+        accessibilityLabel="Try loading documents again"
+        style={({ pressed }) => [
+          styles.retryButton,
+          {
+            borderColor: palette.line,
+            backgroundColor: pressed ? palette.mossTint : palette.surface,
+          },
+        ]}
+      >
+        <Text style={[styles.retryText, { color: palette.moss }]}>
+          Try again
+        </Text>
+      </Pressable>
     </View>
   ) : (
     <EmptyState />
@@ -191,7 +235,32 @@ export function LibraryScreen() {
         )}
         ListHeaderComponent={
           <View style={styles.uploadWrapper}>
-            <UploadButton onPick={handlePick} uploading={uploading} />
+            <UploadButton
+              onPick={handlePick}
+              onError={handlePickError}
+              uploading={uploading}
+            />
+            {/* A refresh that fails while the list already has rows never
+                reaches the empty-state branch below, so it is reported here
+                instead of leaving stale rows looking current. */}
+            {loadError && documents.length > 0 && (
+              <Pressable
+                onPress={handleRetry}
+                accessibilityRole="button"
+                accessibilityLabel={`${loadError} Tap to try again.`}
+                style={[
+                  styles.banner,
+                  { backgroundColor: palette.surface, borderColor: palette.alert },
+                ]}
+              >
+                <Text style={[styles.bannerText, { color: palette.alert }]}>
+                  {loadError}
+                </Text>
+                <Text style={[styles.bannerHint, { color: palette.inkSoft }]}>
+                  Showing the last list that loaded. Tap to try again.
+                </Text>
+              </Pressable>
+            )}
           </View>
         }
         ListEmptyComponent={listEmpty}
@@ -273,5 +342,34 @@ const styles = StyleSheet.create({
     fontFamily: fonts.body.regular,
     fontSize: 12,
     textAlign: "center",
+  },
+  banner: {
+    marginTop: spacing.md,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.xs,
+  },
+  bannerText: {
+    fontFamily: fonts.body.medium,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  bannerHint: {
+    fontFamily: fonts.body.regular,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  retryButton: {
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  retryText: {
+    fontFamily: fonts.body.medium,
+    fontSize: 13,
   },
 });
