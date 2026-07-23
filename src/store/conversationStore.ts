@@ -18,9 +18,15 @@ export type ConversationMessage = {
 /** Caller supplies the content; the store stamps id and createdAt. */
 export type NewMessage = Omit<ConversationMessage, "id" | "createdAt">;
 
+/** The mutable fields of a stored message — content and its retrieval line. */
+export type MessagePatch = Partial<Pick<ConversationMessage, "content" | "source">>;
+
 type ConversationState = {
   messages: ConversationMessage[];
-  addMessage: (message: NewMessage) => void;
+  /** Appends a message and returns the id stamped onto it. */
+  addMessage: (message: NewMessage) => string;
+  /** Patches an existing message in place (a no-op if the id is gone). */
+  updateMessage: (id: string, patch: MessagePatch) => void;
   clear: () => void;
 };
 
@@ -48,12 +54,22 @@ export const useConversationStore = create<ConversationState>()(
   persist(
     (set) => ({
       messages: [],
-      addMessage: (message) =>
+      addMessage: (message) => {
+        // Stamp the id before the set so it can be returned to the caller,
+        // which uses it to update this same message as a spoken answer streams.
+        const created: ConversationMessage = {
+          ...message,
+          id: createId(),
+          createdAt: Date.now(),
+        };
+        set((state) => ({ messages: [...state.messages, created] }));
+        return created.id;
+      },
+      updateMessage: (id, patch) =>
         set((state) => ({
-          messages: [
-            ...state.messages,
-            { ...message, id: createId(), createdAt: Date.now() },
-          ],
+          messages: state.messages.map((message) =>
+            message.id === id ? { ...message, ...patch } : message,
+          ),
         })),
       clear: () => set({ messages: [] }),
     }),
