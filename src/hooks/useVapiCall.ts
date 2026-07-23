@@ -71,6 +71,62 @@ function toFriendlyMessage(error: unknown): string {
 }
 
 /**
+ * Serializes any value for logging, surviving the two things that make a raw
+ * `console.warn(err)` useless in Metro: circular references (Daily/VAPI errors
+ * are full of them) and `Error` instances (which stringify to `{}`). Used to
+ * dump the exact reason VAPI/Daily ejected a call.
+ */
+function safeStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  try {
+    return JSON.stringify(
+      value,
+      (_key, val) => {
+        if (val instanceof Error) {
+          return { name: val.name, message: val.message, stack: val.stack };
+        }
+        if (typeof val === "object" && val !== null) {
+          if (seen.has(val)) return "[Circular]";
+          seen.add(val);
+        }
+        return val;
+      },
+      2,
+    );
+  } catch (err) {
+    return `<unserializable: ${String(err)}>`;
+  }
+}
+
+/**
+ * Logs a VAPI/Daily error with every field an ejection tends to hide behind.
+ *
+ * Daily ejections surface as `{ action: "error", errorMsg, error }`, VAPI wraps
+ * stage failures as `{ type, stage, error }`, and its API client throws the
+ * Response with the body on `error` — so the useful string is nested and gets
+ * collapsed to "[object Object]" by a plain log. This pulls the likely fields
+ * up front and appends the full serialized payload after them.
+ */
+function logVapiError(context: string, error: unknown): void {
+  const record = (
+    error && typeof error === "object" ? error : {}
+  ) as Record<string, unknown>;
+  const nested = (
+    record.error && typeof record.error === "object" ? record.error : {}
+  ) as Record<string, unknown>;
+
+  console.warn(
+    `${context}` +
+      `\n  action/type: ${String(record.action ?? record.type ?? nested.type ?? "—")}` +
+      `\n  stage:       ${String(record.stage ?? nested.stage ?? "—")}` +
+      `\n  errorMsg:    ${String(record.errorMsg ?? record.msg ?? nested.errorMsg ?? "—")}` +
+      `\n  message:     ${String(record.message ?? nested.message ?? "—")}` +
+      `\n  endedReason: ${String(record.endedReason ?? nested.endedReason ?? "—")}` +
+      `\n  full:        ${safeStringify(error)}`,
+  );
+}
+
+/**
  * Asks for RECORD_AUDIO on Android before the call starts.
  *
  * react-native-webrtc requests it on its own during `getUserMedia`, but by then
@@ -80,11 +136,34 @@ function toFriendlyMessage(error: unknown): string {
  * there is caught by the error mapping above instead.
  */
 async function ensureMicPermission(): Promise<boolean> {
-  if (Platform.OS !== "android") return true;
-  const result = await PermissionsAndroid.request(
-    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+  if (Platform.OS !== "android") {
+    // iOS has no pre-flight permission API available to JS here; the native
+    // audio session prompts on first mic use, and a denial comes back through
+    // the error mapping above. So we can only confirm the grant on Android —
+    // on iOS, watch the logs for a permission/NotAllowed error after start().
+    console.log(
+      "[vapi] mic permission: iOS — relying on the native audio session prompt (cannot pre-confirm from JS)",
+    );
+    return true;
+  }
+
+  const RECORD_AUDIO = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
+
+  // check() reports the *actual* on-device grant state (a manifest entry alone
+  // does not grant it), so this distinguishes "already granted" from "the OS
+  // just prompted" and proves the mic is really available before the call.
+  const alreadyGranted = await PermissionsAndroid.check(RECORD_AUDIO);
+  console.log(
+    `[vapi] mic permission (Android): already granted on device? ${alreadyGranted}`,
   );
-  return result === PermissionsAndroid.RESULTS.GRANTED;
+  if (alreadyGranted) return true;
+
+  const result = await PermissionsAndroid.request(RECORD_AUDIO);
+  const granted = result === PermissionsAndroid.RESULTS.GRANTED;
+  console.log(
+    `[vapi] mic permission (Android): request result "${result}" (granted=${granted})`,
+  );
+  return granted;
 }
 
 /**
@@ -128,6 +207,7 @@ export function useVapiCall(): UseVapiCallResult {
     vapi.removeAllListeners();
 
     vapi.on("call-start", () => {
+      console.log("[vapi] call-start — connected and listening (mic live)");
       activeRef.current = true;
       // Each call starts its own conversation history, so the cursor restarts
       // from zero while the store keeps everything from previous calls.
@@ -138,13 +218,52 @@ export function useVapiCall(): UseVapiCallResult {
     });
     vapi.on("speech-start", () => setState("speaking"));
     vapi.on("speech-end", () => setState("listening"));
+
+    // Staged startup telemetry (RN SDK ≥ 0.3). `call-start-progress` traces
+    // each connection stage; `call-start-failed` fires with the exact stage
+    // and error string when the call is rejected/ejected while connecting —
+    // the single most useful signal for the "green mic then ejected" symptom.
+    vapi.on("call-start-progress", (event) => {
+      console.log(
+        `[vapi] start-progress: stage=${event.stage} status=${event.status}` +
+          (event.metadata ? ` metadata=${safeStringify(event.metadata)}` : ""),
+      );
+    });
+    vapi.on("call-start-failed", (event) => {
+      logVapiError("[vapi] call-start-failed", event);
+    });
+
     vapi.on("call-end", () => {
+      // The RN SDK's `call-end` carries no payload, so the *reason* a call
+      // ended/ejected does not arrive here — it comes through `error` and the
+      // `status-update`/`end-of-call-report` message (endedReason), both
+      // logged below.
+      console.log("[vapi] call-end");
       activeRef.current = false;
       setState("idle");
     });
     vapi.on("message", (message: unknown) => {
-      const record = message as { type?: unknown; messages?: unknown } | null;
-      if (!record || record.type !== "conversation-update") return;
+      const record = message as {
+        type?: unknown;
+        messages?: unknown;
+        status?: unknown;
+        endedReason?: unknown;
+      } | null;
+      if (!record || typeof record !== "object") return;
+
+      // The definitive "why did the call end/eject" signal is VAPI's
+      // status-update / end-of-call-report message, whose `endedReason` names
+      // the exact fault (e.g. a "pipeline-error-…-voice-failed"). Surface it —
+      // it does not come through the `error` event.
+      if (
+        record.type === "status-update" ||
+        record.type === "end-of-call-report" ||
+        "endedReason" in record
+      ) {
+        console.warn(`[vapi] status message ${safeStringify(record)}`);
+      }
+
+      if (record.type !== "conversation-update") return;
 
       const { turns, nextIndex, pendingSource } = extractNewTurns(
         record.messages,
@@ -156,7 +275,7 @@ export function useVapiCall(): UseVapiCallResult {
       turns.forEach(addMessage);
     });
     vapi.on("error", (callError: unknown) => {
-      console.warn("[vapi] call error", callError);
+      logVapiError("[vapi] call error", callError);
       activeRef.current = false;
       setError(toFriendlyMessage(callError));
       setState("idle");
@@ -195,6 +314,7 @@ export function useVapiCall(): UseVapiCallResult {
       }
 
       const vapi = getClient();
+      console.log("[vapi] mic OK — calling vapi.start()");
       // The SDK swallows start failures and resolves to null instead of
       // rejecting, so a null result is a failure, not an idle no-op.
       const call = await vapi.start(assistantConfig);

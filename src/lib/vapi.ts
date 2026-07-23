@@ -68,12 +68,22 @@ export const assistantConfig: CreateAssistantDTO = {
     provider: "deepgram",
     model: "nova-2",
     language: "en",
-    smartFormat: true,
   },
   voice: {
-    provider: "playht",
-    voiceId: "jennifer",
-    model: "PlayHT2.0-turbo",
+    // Use VAPI's built-in voice, matching the working web config
+    // (voice-rag-assistant/src/lib/vapi/assistant.ts) exactly.
+    //
+    // This had drifted to a third-party PlayHT voice (provider: "playht",
+    // voiceId: "jennifer", model: "PlayHT2.0-turbo"), which was the confirmed
+    // cause of the "connects then ejects" symptom on mobile: VAPI brings up
+    // the Daily transport first (the mic goes green), then initialises the
+    // voice pipeline server-side — and the PlayHT voice failed to provision
+    // for this account, so VAPI ejected the participant a moment later
+    // (endedReason: pipeline-error-playht-voice-failed). The web app never hit
+    // this because it uses the always-available built-in "vapi" provider.
+    // Keep this in lockstep with the web config.
+    provider: "vapi",
+    voiceId: "Elliot",
   },
   model: {
     provider: "groq",
