@@ -21,7 +21,9 @@ import { VoiceOrb } from "../components/VoiceOrb";
 import { Loading } from "../components/Loading";
 import { useVapiCall } from "../hooks/useVapiCall";
 import { askQuestion } from "../lib/api";
+import { describeError } from "../lib/errors";
 import {
+  useConversationHydrated,
   useConversationStore,
   type ConversationMessage,
 } from "../store/conversationStore";
@@ -36,6 +38,9 @@ export function AssistantScreen() {
 
   const listRef = useRef<FlatList<ConversationMessage>>(null);
   const messages = useConversationStore((state) => state.messages);
+  // The saved transcript arrives a tick after mount, so an empty list before
+  // then means "not loaded yet", not "nothing to show".
+  const hydrated = useConversationHydrated();
   const addMessage = useConversationStore((state) => state.addMessage);
   const [draft, setDraft] = useState("");
   const [asking, setAsking] = useState(false);
@@ -72,11 +77,14 @@ export function AssistantScreen() {
       });
     } catch (err) {
       console.warn("[query] failed", err);
+      // The failure becomes an assistant turn rather than an alert, so the
+      // question it belongs to stays visible right above it.
       addMessage({
         role: "assistant",
-        content: `Sorry — I couldn't answer that. ${
-          err instanceof Error ? err.message : "Please try again."
-        }`,
+        content: `Sorry — I couldn't answer that. ${describeError(
+          err,
+          "Please ask again in a moment.",
+        )}`,
       });
     } finally {
       setAsking(false);
@@ -106,9 +114,13 @@ export function AssistantScreen() {
           )}
           ListEmptyComponent={
             <View style={styles.emptyState}>
-              <Text style={[styles.emptyText, { color: palette.inkSoft }]}>
-                Ask a question about your documents — by voice or text.
-              </Text>
+              {hydrated ? (
+                <Text style={[styles.emptyText, { color: palette.inkSoft }]}>
+                  Ask a question about your documents — by voice or text.
+                </Text>
+              ) : (
+                <Loading centered label="Restoring your conversation…" />
+              )}
             </View>
           }
           ListFooterComponent={
@@ -136,6 +148,9 @@ export function AssistantScreen() {
             >
               <Text style={[styles.voiceErrorText, { color: palette.alert }]}>
                 {voiceError}
+              </Text>
+              <Text style={[styles.voiceErrorHint, { color: palette.inkSoft }]}>
+                Tap to dismiss
               </Text>
             </Pressable>
           )}
@@ -229,6 +244,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     textAlign: "center",
+  },
+  voiceErrorHint: {
+    fontFamily: fonts.body.regular,
+    fontSize: 11,
+    textAlign: "center",
+    marginTop: spacing.xs,
   },
   inputBar: {
     flexDirection: "row",
