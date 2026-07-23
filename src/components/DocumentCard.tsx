@@ -39,11 +39,15 @@ export function DocumentCard({
       : palette.moss;
 
   // "1A" ≈ 10% alpha — the alert tint (no dedicated token, matches web danger/10).
+  // A failed row is a dead end unless it says what to do about it, so the
+  // backend's reason (when there is one) is paired with the way out.
   const badge = failed
     ? {
         bg: `${palette.alert}1A`,
         fg: palette.alert,
-        label: document.error_message ?? "Failed",
+        label: document.error_message
+          ? `Couldn't process this file: ${document.error_message} — delete it and try uploading again.`
+          : "Couldn't process this file. Delete it and try uploading again.",
       }
     : indexing
       ? { bg: palette.ochreTint, fg: palette.ochre, label: "Indexing…" }
@@ -97,7 +101,7 @@ export function DocumentCard({
         ]}
       >
         <Text
-          numberOfLines={failed ? 2 : 1}
+          numberOfLines={failed ? 3 : 1}
           style={[styles.badgeText, { color: badge.fg }]}
         >
           {badge.label}
