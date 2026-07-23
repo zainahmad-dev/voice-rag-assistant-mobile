@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PermissionsAndroid, Platform } from "react-native";
 
 import type { VoiceOrbState } from "../components/VoiceOrb";
+import { NETWORK_MESSAGE, isNetworkError, withHint } from "../lib/errors";
 import { extractNewTurns } from "../lib/parseConversationUpdate";
 import { assistantConfig, getVapiClient, resetVapiClient } from "../lib/vapi";
 import { useConversationStore } from "../store/conversationStore";
@@ -18,9 +19,8 @@ type UseVapiCallResult = {
 
 const MIC_PERMISSION_MESSAGE =
   "Microphone access is off. Enable it for this app in Settings, then tap the orb again.";
-const NETWORK_MESSAGE =
-  "Couldn't reach the voice service. Check your connection and try again.";
-const GENERIC_MESSAGE = "The voice call ran into a problem. Please try again.";
+const GENERIC_MESSAGE =
+  "The voice call ran into a problem. Tap the orb to try again.";
 
 /** Pulls the most useful string out of the many error shapes VAPI can throw. */
 function readMessage(error: unknown): string | null {
@@ -52,7 +52,7 @@ function toFriendlyMessage(error: unknown): string {
       ? (error as { status?: unknown }).status
       : undefined;
   if (status === 401 || status === 403) {
-    return "Voice isn't configured correctly (the VAPI key was rejected).";
+    return "Voice isn't configured correctly — the VAPI key was rejected. Check EXPO_PUBLIC_VAPI_PUBLIC_KEY and rebuild the app.";
   }
 
   const raw = readMessage(error);
@@ -63,10 +63,11 @@ function toFriendlyMessage(error: unknown): string {
   if (/permission|not allowed|securityerror|notallowed/i.test(raw)) {
     return MIC_PERMISSION_MESSAGE;
   }
-  if (/network|fetch|timeout|econn|offline/i.test(raw)) {
+  if (isNetworkError(raw) || /network|fetch|offline/i.test(raw)) {
     return NETWORK_MESSAGE;
   }
-  return raw;
+  // A raw SDK string rarely says what to do, so pair it with the next step.
+  return withHint(raw, "Tap the orb to try again.");
 }
 
 /**
